@@ -47,6 +47,8 @@ const KTF_DATABASE_STORAGE_LIMIT: u64 = 1024 * 1024;
 // a real DB handle pointer from an unrelated guest pointer (e.g. a C-string
 // name pointer that KTF's slot 6 passes through the same SVC argument slot).
 const DATABASE_HANDLE_MAGIC: u32 = 0x4D434442;
+/// Upper bound on the zero fill `stream_read` does past EOF (headers titles read are a few dozen bytes).
+const EOF_ZERO_FILL_MAX: u32 = 256;
 const MAX_NAME_LEN: usize = 31; // leave a byte for null terminator inside the 32-byte field
 
 pub async fn open_database(context: &mut dyn WIPICContext, ptr_name: WIPICWord, mode: i32, r#type: i32) -> Result<i32> {
@@ -534,8 +536,16 @@ pub async fn stream_read(context: &mut dyn WIPICContext, db_id: i32, buf_ptr: WI
     };
 
     if handle.read_cursor >= handle.buffer_len {
-        // Don't touch buf — caller may have passed a sentinel (NULL) that
-        // we shouldn't write to. Some titles do this past EOF.
+        // Past EOF the caller's buffer gets zeros (the return stays M_E_EOF). 붕어빵타이쿤3 opens its
+        // missing "option" database (KTF opens it as empty, see `open_database_ktf`), reads an 8-byte
+        // header without checking the result, and passes a word of it to MC_knlAlloc: left untouched,
+        // that word is stack garbage (~1 GB request → Allocation failure); zeroed, the game sees an
+        // empty header and writes fresh defaults. NULL stays untouched (some titles pass it past EOF),
+        // and the fill is capped so a garbage length can't clobber unrelated guest memory.
+        if buf_ptr != 0 && buf_len != 0 {
+            let fill = core::cmp::min(buf_len, EOF_ZERO_FILL_MAX) as usize;
+            let _ = context.write_bytes(buf_ptr, &vec![0u8; fill]);
+        }
         return Ok(-23); // M_E_EOF
     }
 
@@ -773,7 +783,7 @@ mod tests {
 
     use super::{
         KTF_DATABASE_STORAGE_LIMIT, delete_database, delete_record_ktf, exists_database, list_databases, list_record_info, open_database,
-        select_record, select_record_ktf, stream_read, stream_write, tell_ktf, update_record,
+        open_database_ktf, select_record, select_record_ktf, stream_read, stream_write, tell_ktf, update_record,
     };
 
     #[futures_test::test]
@@ -877,6 +887,26 @@ mod tests {
         let mut data = [0; 9];
         context.read_bytes(0x2000, &mut data).unwrap();
         assert_eq!(&data, b"seed-data");
+    }
+
+    #[futures_test::test]
+    async fn ktf_stream_read_past_eof_zeroes_buffer() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"option\0").unwrap();
+        // KTF opens a missing database as an empty one; reading it hits EOF immediately
+        let db_id = open_database_ktf(&mut context, 0x1000, 1, 1).await.unwrap();
+        assert!(db_id > 0);
+
+        context.write_bytes(0x2000, &[0xaa; 12]).unwrap();
+        assert_eq!(stream_read(&mut context, db_id, 0x2000, 8).await.unwrap(), -23);
+
+        let mut data = [0; 12];
+        context.read_bytes(0x2000, &mut data).unwrap();
+        assert_eq!(&data[..8], &[0; 8]); // requested bytes zeroed
+        assert_eq!(&data[8..], &[0xaa; 4]); // nothing past the request touched
+
+        // NULL destination is left alone
+        assert_eq!(stream_read(&mut context, db_id, 0, 8).await.unwrap(), -23);
     }
 
     fn database_test_context() -> TestContext {
