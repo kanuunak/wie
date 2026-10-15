@@ -273,6 +273,15 @@ pub async fn get_free_memory(_context: &mut dyn WIPICContext) -> Result<i32> {
     Ok(0x100000) // TODO hardcoded
 }
 
+/// `MC_knlGetAccessLevel()`: the running program's access level. The value handsets returned is
+/// not documented here; 0 lets 이노티아 연대기2 continue past the call (any value it tried behaved
+/// the same), where the previous unimplemented stub aborted the emulator.
+pub async fn get_access_level(_context: &mut dyn WIPICContext) -> Result<i32> {
+    tracing::warn!("stub MC_knlGetAccessLevel()");
+
+    Ok(0)
+}
+
 pub async fn exit(context: &mut dyn WIPICContext, code: i32) -> Result<()> {
     tracing::debug!("MC_knlExit({code})");
 

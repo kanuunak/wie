@@ -42,7 +42,10 @@ struct DatabaseHandle {
 }
 
 const MIN_BUFFER_CAPACITY: u32 = 64;
-const KTF_DATABASE_STORAGE_LIMIT: u64 = 1024 * 1024;
+/// Storage a KTF title is told it may still use (`MC_dbListDataBase`). Titles that unpack bundled
+/// data on first launch check this against what they need: 이노티아 연대기2 asks for 2103 KB and
+/// stops with "not enough space" under a 1 MB limit. Handsets of the era had several MB free.
+const KTF_DATABASE_STORAGE_LIMIT: u64 = 16 * 1024 * 1024;
 // "MCDB" — sentinel at the start of the handle struct so we can distinguish
 // a real DB handle pointer from an unrelated guest pointer (e.g. a C-string
 // name pointer that KTF's slot 6 passes through the same SVC argument slot).
